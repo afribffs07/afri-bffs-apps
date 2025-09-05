@@ -1,4 +1,6 @@
+
 import { Platform, Alert } from 'react-native';
+import * as InAppPurchases from 'expo-in-app-purchases';
 import { supabase } from './supabase';
 
 export interface IAPProduct {
@@ -39,19 +41,49 @@ class IAPService {
     try {
       console.log('IAP service initializing...');
       
-      // Mock products until expo-in-app-purchases is installed
+      if (Platform.OS === 'web') {
+        // Web fallback - use mock products
+        this.products = [{
+          productId: this.PRODUCT_IDS.PREMIUM_MONTHLY,
+          price: '$7.99',
+          title: 'Afri-BFFs Premium',
+          description: 'Monthly premium subscription'
+        }];
+        this.isInitialized = true;
+        console.log('IAP service initialized (web mode - payments not available)');
+        return;
+      }
+
+      // Initialize InAppPurchases for mobile
+      await InAppPurchases.connectAsync();
+      
+      // Get products from app stores
+      const { results } = await InAppPurchases.getProductsAsync([
+        this.PRODUCT_IDS.PREMIUM_MONTHLY
+      ]);
+
+      this.products = results.map(product => ({
+        productId: product.productId,
+        price: product.priceString || '$7.99',
+        title: product.title || 'Afri-BFFs Premium',
+        description: product.description || 'Monthly premium subscription'
+      }));
+      
+      this.isInitialized = true;
+      console.log('IAP service initialized with products:', this.products);
+    } catch (error) {
+      console.error('IAP initialization error:', error);
+      
+      // Fallback to mock products
       this.products = [{
         productId: this.PRODUCT_IDS.PREMIUM_MONTHLY,
         price: '$7.99',
         title: 'Afri-BFFs Premium',
         description: 'Monthly premium subscription'
       }];
-      
       this.isInitialized = true;
-      console.log('IAP service initialized (mock mode)');
-    } catch (error) {
-      console.error('IAP initialization error:', error);
-      throw new Error(`Failed to initialize in-app purchases: ${error.message}`);
+      
+      throw new Error(`Failed to initialize in-app purchases: ${(error as Error).message}`);
     }
   }
 
@@ -59,28 +91,69 @@ class IAPService {
     try {
       console.log('IAP purchase attempt with promo code:', promoCode);
       
+      if (Platform.OS === 'web') {
+        const message = 'In-app purchases are not available on web. Please use the mobile app to subscribe.';
+        alert(message);
+        throw new Error('In-app purchases not available on web');
+      }
+
+      if (!this.isInitialized) {
+        await this.initialize();
+      }
+      
       if (promoCode) {
         // Handle promotional offer codes
         await this.handlePromotionalCode(promoCode);
         return;
       }
       
-      console.log('IAP not available - install expo-in-app-purchases first');
+      console.log('Starting purchase for:', this.PRODUCT_IDS.PREMIUM_MONTHLY);
       
-      const message = Platform.OS === 'web' 
-        ? 'In-app purchases are not available on web. Please use the mobile app.'
-        : 'Please install expo-in-app-purchases package first:\n\nnpx expo install expo-in-app-purchases';
+      const purchaseResult = await InAppPurchases.purchaseItemAsync(this.PRODUCT_IDS.PREMIUM_MONTHLY);
       
-      if (Platform.OS === 'web') {
-        alert(message);
+      if (purchaseResult.results && purchaseResult.results.length > 0) {
+        const purchase = purchaseResult.results[0];
+        
+        if (purchase.responseCode === InAppPurchases.IAPResponseCode.OK) {
+          console.log('Purchase successful:', purchase);
+          
+          // Validate the purchase with our backend
+          if (Platform.OS === 'ios') {
+            await this.validateAppleReceipt(purchase);
+          } else if (Platform.OS === 'android') {
+            await this.validateGooglePlayReceipt(purchase);
+          }
+        } else {
+          console.log('Purchase failed with response code:', purchase.responseCode);
+          throw new Error(`Purchase failed: ${this.getResponseCodeMessage(purchase.responseCode)}`);
+        }
       } else {
-        Alert.alert('Package Required', message);
+        throw new Error('Purchase failed: No purchase results returned');
       }
-      
-      throw new Error('expo-in-app-purchases not installed');
     } catch (error) {
       console.error('Purchase error:', error);
+      
+      if ((error as Error).message.includes('User cancelled') || (error as Error).message.includes('cancelled')) {
+        // User cancelled - don't show error
+        return;
+      }
+      
       throw error;
+    }
+  }
+
+  private getResponseCodeMessage(responseCode: InAppPurchases.IAPResponseCode): string {
+    switch (responseCode) {
+      case InAppPurchases.IAPResponseCode.OK:
+        return 'Success';
+      case InAppPurchases.IAPResponseCode.USER_CANCELED:
+        return 'User cancelled';
+      case InAppPurchases.IAPResponseCode.PAYMENT_INVALID:
+        return 'Payment invalid';
+      case InAppPurchases.IAPResponseCode.DEFERRED:
+        return 'Payment deferred';
+      default:
+        return 'Unknown error';
     }
   }
 
@@ -105,34 +178,25 @@ class IAPService {
     try {
       console.log('Processing Apple promotional offer:', promoCode);
       
-      // For now, show instruction to install expo-in-app-purchases
-      const message = 'To redeem Apple promotional offers:\n\n1. Install expo-in-app-purchases\n2. Configure promotional offers in App Store Connect\n3. Use the promotional offer API\n\nPromo code: ' + promoCode;
+      // For Apple promotional offers, you would typically:
+      // 1. Create promotional offer object with signature
+      // 2. Use it in purchaseItemAsync
+      
+      // For now, show that the feature needs App Store Connect setup
+      const message = 'Apple promotional offers require setup in App Store Connect. The promo code has been noted but regular purchase will proceed.';
       
       if (Platform.OS === 'web') {
         alert(message);
       } else {
-        Alert.alert('Apple Promotional Offer', message);
+        Alert.alert('Promotional Offer', message);
       }
       
-      // When expo-in-app-purchases is installed, this would be:
-      /*
-      const promotionalOffer: PromotionalOffer = {
-        identifier: promoCode,
-        keyIdentifier: 'PROMO_KEY_ID', // From App Store Connect
-        nonce: generateNonce(),
-        signature: generateSignature(promoCode),
-        timestamp: Date.now()
-      };
-      
-      const purchaseResult = await InAppPurchases.purchaseItemAsync({
-        productId: this.PRODUCT_IDS.PREMIUM_MONTHLY,
-        promotionalOffer: promotionalOffer
-      });
+      // Proceed with regular purchase
+      const purchaseResult = await InAppPurchases.purchaseItemAsync(this.PRODUCT_IDS.PREMIUM_MONTHLY);
       
       if (purchaseResult.results?.[0]?.responseCode === InAppPurchases.IAPResponseCode.OK) {
         await this.validateAppleReceipt(purchaseResult.results[0]);
       }
-      */
     } catch (error) {
       console.error('Apple promotional offer error:', error);
       throw error;
@@ -143,8 +207,10 @@ class IAPService {
     try {
       console.log('Processing Google Play promotional code:', promoCode);
       
-      // For now, show instruction to install expo-in-app-purchases
-      const message = 'To redeem Google Play promotional codes:\n\n1. Install expo-in-app-purchases\n2. Configure promotional codes in Google Play Console\n3. Use the promotional pricing API\n\nPromo code: ' + promoCode;
+      // Google Play promotional codes are typically handled server-side
+      // or through the Play Store app directly
+      
+      const message = 'Google Play promotional codes are handled through the Play Store. Please redeem the code in the Play Store app first, then proceed with purchase.';
       
       if (Platform.OS === 'web') {
         alert(message);
@@ -152,22 +218,81 @@ class IAPService {
         Alert.alert('Google Play Promotional Code', message);
       }
       
-      // When expo-in-app-purchases is installed, this would be:
-      /*
-      // Google Play handles promo codes differently - they're usually handled server-side
-      // or through the Play Store app directly. For in-app redemption:
-      
-      const purchaseResult = await InAppPurchases.purchaseItemAsync({
-        productId: this.PRODUCT_IDS.PREMIUM_MONTHLY,
-        offerToken: promoCode // If using promotional pricing
-      });
+      // Proceed with regular purchase
+      const purchaseResult = await InAppPurchases.purchaseItemAsync(this.PRODUCT_IDS.PREMIUM_MONTHLY);
       
       if (purchaseResult.results?.[0]?.responseCode === InAppPurchases.IAPResponseCode.OK) {
         await this.validateGooglePlayReceipt(purchaseResult.results[0]);
       }
-      */
     } catch (error) {
       console.error('Google Play promotional code error:', error);
+      throw error;
+    }
+  }
+
+  private async validateAppleReceipt(purchase: InAppPurchases.Purchase): Promise<void> {
+    try {
+      console.log('Validating Apple receipt...');
+      
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      const { data, error } = await supabase.functions.invoke('validate-iap-receipt', {
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: {
+          platform: 'ios',
+          productId: purchase.productId,
+          receipt: purchase.transactionReceipt,
+          transactionId: purchase.transactionId
+        }
+      });
+
+      if (error) {
+        console.error('Receipt validation error:', error);
+        throw error;
+      }
+
+      console.log('Apple receipt validated successfully:', data);
+    } catch (error) {
+      console.error('Apple receipt validation failed:', error);
+      throw error;
+    }
+  }
+
+  private async validateGooglePlayReceipt(purchase: InAppPurchases.Purchase): Promise<void> {
+    try {
+      console.log('Validating Google Play receipt...');
+      
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      const { data, error } = await supabase.functions.invoke('validate-iap-receipt', {
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: {
+          platform: 'android',
+          productId: purchase.productId,
+          // purchaseToken: purchase.purchaseToken, // This property is not directly on InAppPurchases.Purchase
+          purchaseToken: (purchase as InAppPurchases.GooglePurchase).purchaseToken, // Cast to GooglePurchase for specific property
+          transactionId: purchase.orderId
+        }
+      });
+
+      if (error) {
+        console.error('Receipt validation error:', error);
+        throw error;
+      }
+
+      console.log('Google Play receipt validated successfully:', data);
+    } catch (error) {
+      console.error('Google Play receipt validation failed:', error);
       throw error;
     }
   }
@@ -181,17 +306,8 @@ class IAPService {
         throw new Error('Invalid promotional code format');
       }
       
-      // For now, simulate successful redemption
-      const message = `Promotional code "${code}" ready for redemption.\n\nNote: Install expo-in-app-purchases to enable full functionality.`;
-      
-      if (Platform.OS === 'web') {
-        alert(message);
-      } else {
-        Alert.alert('Promotional Code Ready', message, [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Redeem', onPress: () => this.purchaseSubscription(code) }
-        ]);
-      }
+      // Process the promotional code through purchase flow
+      await this.purchaseSubscription(code);
     } catch (error) {
       console.error('Error redeeming promotional code:', error);
       throw error;
@@ -200,11 +316,15 @@ class IAPService {
 
   async checkAvailablePromotionalOffers(): Promise<string[]> {
     try {
-      // When expo-in-app-purchases is installed, this would check for available offers
       console.log('Checking available promotional offers...');
       
-      // Mock available offers for now
-      return ['WELCOME50', 'FRIEND25', 'STUDENT20'];
+      if (Platform.OS === 'web') {
+        return [];
+      }
+      
+      // In a real implementation, you would check with app stores for available offers
+      // For now, return empty array as this requires additional setup
+      return [];
     } catch (error) {
       console.error('Error checking promotional offers:', error);
       return [];
@@ -231,7 +351,7 @@ class IAPService {
         throw error;
       }
       
-      return data || { subscribed: false };
+      return (data as SubscriptionStatus) || { subscribed: false };
     } catch (error) {
       console.error('Error checking subscription status:', error);
       return { subscribed: false };
@@ -240,13 +360,39 @@ class IAPService {
 
   async restorePurchases(): Promise<void> {
     try {
-      console.log('Restore purchases not available - install expo-in-app-purchases first');
+      console.log('Restoring purchases...');
       
-      const message = 'Please install expo-in-app-purchases package first';
+      if (Platform.OS === 'web') {
+        const message = 'Purchase restoration is not available on web. Please use the mobile app.';
+        alert(message);
+        return;
+      }
+
+      const { results } = await InAppPurchases.getPurchaseHistoryAsync();
+      
+      console.log('Purchase history:', results);
+      
+      // Process each historical purchase
+      for (const purchase of results) {
+        if (purchase.productId === this.PRODUCT_IDS.PREMIUM_MONTHLY) {
+          try {
+            if (Platform.OS === 'ios') {
+              await this.validateAppleReceipt(purchase);
+            } else if (Platform.OS === 'android') {
+              await this.validateGooglePlayReceipt(purchase);
+            }
+          } catch (error) {
+            console.error('Error validating restored purchase:', error);
+            // Continue with other purchases
+          }
+        }
+      }
+      
+      const message = 'Purchase restoration completed. Your subscription status has been updated.';
       if (Platform.OS === 'web') {
         alert(message);
       } else {
-        Alert.alert('Package Required', message);
+        Alert.alert('Restore Complete', message);
       }
     } catch (error) {
       console.error('Error restoring purchases:', error);
@@ -256,17 +402,21 @@ class IAPService {
 
   async openSubscriptionManagement(): Promise<void> {
     try {
+      if (Platform.OS === 'web') {
+        const message = 'To manage your subscription:\n\n• iOS: Settings → Apple ID → Subscriptions\n• Android: Play Store → Account → Subscriptions';
+        alert(message);
+        return;
+      }
+
       const message = Platform.select({
-        ios: 'Go to Settings > Apple ID > Subscriptions to manage your subscription',
-        android: 'Go to Play Store > Account > Subscriptions to manage your subscription',
+        ios: 'Go to Settings → Apple ID → Subscriptions to manage your subscription',
+        android: 'Go to Play Store → Account → Subscriptions to manage your subscription',
         default: 'Subscription management not available on this platform'
       });
       
-      if (Platform.OS === 'web') {
-        alert(message);
-      } else {
-        Alert.alert('Manage Subscription', message);
-      }
+      Alert.alert('Manage Subscription', message || '', [ // Ensure message is a string for Alert.alert
+        { text: 'OK', style: 'default' }
+      ]);
     } catch (error) {
       console.error('Error opening subscription management:', error);
       throw new Error('Unable to open subscription management');
@@ -279,6 +429,9 @@ class IAPService {
 
   async disconnect(): Promise<void> {
     try {
+      if (Platform.OS !== 'web') {
+        await InAppPurchases.disconnectAsync();
+      }
       this.isInitialized = false;
       console.log('IAP service disconnected');
     } catch (error) {

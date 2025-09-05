@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Platform } from 'react-native';
 import { iapService, SubscriptionStatus } from '@/services/iapService';
@@ -11,6 +12,26 @@ export function useSubscription() {
   const lastChecked = useRef<number>(0);
   const checkInProgress = useRef(false);
   const lastUserId = useRef<string | null>(null);
+
+  // Initialize IAP service when hook is first used
+  useEffect(() => {
+    const initializeIAP = async () => {
+      try {
+        await iapService.initialize();
+        console.log('IAP service initialized successfully');
+      } catch (error) {
+        console.error('Failed to initialize IAP service:', error);
+        // Continue anyway - the service will handle fallbacks
+      }
+    };
+
+    initializeIAP();
+
+    // Cleanup on unmount
+    return () => {
+      iapService.disconnect();
+    };
+  }, []);
 
   const checkSubscriptionStatus = useCallback(async (force = false) => {
     if (!user || checkInProgress.current) return;
@@ -66,7 +87,7 @@ export function useSubscription() {
       console.log('Starting IAP subscription creation with promo code:', promoCode);
       await iapService.purchaseSubscription(promoCode);
       setTimeout(() => checkSubscriptionStatus(true), 3000);
-    } catch (error) {
+    } catch (error: any) { // Add ': any' type annotation for the 'error' parameter
       console.error('Failed to create subscription:', error);
       console.error('IAP subscription error details:', {
         platform: Platform.OS,
@@ -86,7 +107,7 @@ export function useSubscription() {
       console.log('Redeeming promotional code:', code);
       await iapService.redeemPromotionalCode(code);
       setTimeout(() => checkSubscriptionStatus(true), 2000);
-    } catch (error) {
+    } catch (error: any) { // Add ': any' type annotation for the 'error' parameter
       console.error('Failed to redeem promotional code:', error);
       throw error;
     } finally {
@@ -97,7 +118,7 @@ export function useSubscription() {
   const checkAvailableOffers = async () => {
     try {
       return await iapService.checkAvailablePromotionalOffers();
-    } catch (error) {
+    } catch (error: any) { // Add ': any' type annotation for the 'error' parameter
       console.error('Failed to check available offers:', error);
       return [];
     }
@@ -108,7 +129,7 @@ export function useSubscription() {
     try {
       await iapService.openSubscriptionManagement();
       setTimeout(() => checkSubscriptionStatus(true), 2000);
-    } catch (error) {
+    } catch (error: any) { // Add ': any' type annotation for the 'error' parameter
       console.error('Failed to open subscription management:', error);
       throw error;
     } finally {
@@ -121,7 +142,7 @@ export function useSubscription() {
     try {
       await iapService.restorePurchases();
       checkSubscriptionStatus(true);
-    } catch (error) {
+    } catch (error: any) { // Add ': any' type annotation for the 'error' parameter
       console.error('Failed to restore purchases:', error);
       throw error;
     } finally {
