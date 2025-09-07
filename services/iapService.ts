@@ -55,41 +55,26 @@ class IAPService {
       }
 
       // Initialize InAppPurchases for mobile
-      console.log('Connecting to app store...');
       await InAppPurchases.connectAsync();
-      console.log('Connected to app store successfully');
       
       // Get products from app stores
-      console.log('Fetching products:', [this.PRODUCT_IDS.PREMIUM_MONTHLY]);
-      const { results, responseCode } = await InAppPurchases.getProductsAsync([
+      const { results } = await InAppPurchases.getProductsAsync([
         this.PRODUCT_IDS.PREMIUM_MONTHLY
       ]);
 
-      console.log('Products fetch response:', { results, responseCode });
-
-      if (responseCode === InAppPurchases.IAPResponseCode.OK) {
-        this.products = results.map(product => ({
-          productId: product.productId,
-          price: product.priceString || '$7.99',
-          title: product.title || 'Afri-BFFs Premium',
-          description: product.description || 'Monthly premium subscription'
-        }));
-        console.log('IAP service initialized with products:', this.products);
-      } else {
-        console.warn('Failed to fetch products, using fallback');
-        this.products = [{
-          productId: this.PRODUCT_IDS.PREMIUM_MONTHLY,
-          price: '$7.99',
-          title: 'Afri-BFFs Premium',
-          description: 'Monthly premium subscription'
-        }];
-      }
+      this.products = results.map(product => ({
+        productId: product.productId,
+        price: product.priceString || '$7.99',
+        title: product.title || 'Afri-BFFs Premium',
+        description: product.description || 'Monthly premium subscription'
+      }));
       
       this.isInitialized = true;
+      console.log('IAP service initialized with products:', this.products);
     } catch (error) {
       console.error('IAP initialization error:', error);
       
-      // Fallback to mock products for development
+      // Fallback to mock products
       this.products = [{
         productId: this.PRODUCT_IDS.PREMIUM_MONTHLY,
         price: '$7.99',
@@ -98,8 +83,7 @@ class IAPService {
       }];
       this.isInitialized = true;
       
-      // Don't throw error in development, just log it
-      console.warn('Using fallback products due to IAP initialization failure');
+      throw new Error(`Failed to initialize in-app purchases: ${(error as Error).message}`);
     }
   }
 
@@ -126,39 +110,24 @@ class IAPService {
       console.log('Starting purchase for:', this.PRODUCT_IDS.PREMIUM_MONTHLY);
       
       const purchaseResult = await InAppPurchases.purchaseItemAsync(this.PRODUCT_IDS.PREMIUM_MONTHLY);
-      console.log('Purchase result:', purchaseResult);
       
       if (purchaseResult.results && purchaseResult.results.length > 0) {
         const purchase = purchaseResult.results[0];
-        console.log('Purchase details:', purchase);
         
         if (purchase.responseCode === InAppPurchases.IAPResponseCode.OK) {
-          console.log('Purchase successful, validating receipt...');
+          console.log('Purchase successful:', purchase);
           
           // Validate the purchase with our backend
-          try {
-            if (Platform.OS === 'ios') {
-              await this.validateAppleReceipt(purchase);
-            } else if (Platform.OS === 'android') {
-              await this.validateGooglePlayReceipt(purchase);
-            }
-            console.log('Receipt validation completed successfully');
-          } catch (validationError) {
-            console.error('Receipt validation failed:', validationError);
-            // Don't throw here - purchase was successful, validation can be retried
+          if (Platform.OS === 'ios') {
+            await this.validateAppleReceipt(purchase);
+          } else if (Platform.OS === 'android') {
+            await this.validateGooglePlayReceipt(purchase);
           }
-        } else if (purchase.responseCode === InAppPurchases.IAPResponseCode.USER_CANCELED) {
-          console.log('Purchase cancelled by user');
-          return; // Don't throw error for user cancellation
         } else {
           console.log('Purchase failed with response code:', purchase.responseCode);
           throw new Error(`Purchase failed: ${this.getResponseCodeMessage(purchase.responseCode)}`);
         }
       } else {
-        console.log('No purchase results returned');
-        if (purchaseResult.responseCode === InAppPurchases.IAPResponseCode.USER_CANCELED) {
-          return; // User cancelled
-        }
         throw new Error('Purchase failed: No purchase results returned');
       }
     } catch (error) {
@@ -399,43 +368,24 @@ class IAPService {
         return;
       }
 
-      console.log('Restoring purchases...');
-      const { results, responseCode } = await InAppPurchases.getPurchaseHistoryAsync();
+      const { results } = await InAppPurchases.getPurchaseHistoryAsync();
       
-      console.log('Purchase history response:', { results, responseCode });
+      console.log('Purchase history:', results);
       
-      if (responseCode === InAppPurchases.IAPResponseCode.OK) {
-        let restoredCount = 0;
-        
-        // Process each historical purchase
-        for (const purchase of results) {
-          if (purchase.productId === this.PRODUCT_IDS.PREMIUM_MONTHLY) {
-            try {
-              console.log('Restoring purchase:', purchase.productId);
-              if (Platform.OS === 'ios') {
-                await this.validateAppleReceipt(purchase);
-              } else if (Platform.OS === 'android') {
-                await this.validateGooglePlayReceipt(purchase);
-              }
-              restoredCount++;
-            } catch (error) {
-              console.error('Error validating restored purchase:', error);
-              // Continue with other purchases
+      // Process each historical purchase
+      for (const purchase of results) {
+        if (purchase.productId === this.PRODUCT_IDS.PREMIUM_MONTHLY) {
+          try {
+            if (Platform.OS === 'ios') {
+              await this.validateAppleReceipt(purchase);
+            } else if (Platform.OS === 'android') {
+              await this.validateGooglePlayReceipt(purchase);
             }
+          } catch (error) {
+            console.error('Error validating restored purchase:', error);
+            // Continue with other purchases
           }
         }
-        
-        const message = restoredCount > 0 
-          ? `Successfully restored ${restoredCount} purchase(s)`
-          : 'No previous purchases found to restore';
-        
-        if (Platform.OS === 'web') {
-          alert(message);
-        } else {
-          Alert.alert('Restore Complete', message);
-        }
-      } else {
-        throw new Error('Failed to retrieve purchase history');
       }
       
       const message = 'Purchase restoration completed. Your subscription status has been updated.';
@@ -479,10 +429,8 @@ class IAPService {
 
   async disconnect(): Promise<void> {
     try {
-      if (Platform.OS !== 'web' && this.isInitialized) {
-        console.log('Disconnecting from app store...');
+      if (Platform.OS !== 'web') {
         await InAppPurchases.disconnectAsync();
-        console.log('Disconnected from app store successfully');
       }
       this.isInitialized = false;
       console.log('IAP service disconnected');
